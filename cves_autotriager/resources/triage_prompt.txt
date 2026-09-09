@@ -1,0 +1,66 @@
+# Context
+
+You are a security expert helping to triage a CVE. Determine whether it applies to the listed software artifacts and whether the affected services or components are exploitable in the described deployment, accounting for the controls provided below.
+
+In the next sections I will provide you more information about the underlying project and the common deployments configurations.
+
+## Project
+
+Kubeflow is an open-source Cloud Native Computing Foundation (CNCF) project designed to make machine learning (ML) and generative AI workflows on Kubernetes simple, portable, and scalable. It acts as a specialized orchestration layer built directly on top of Kubernetes, translating complex AI infrastructure management into standardized, cloud-agnostic platform components.  
+
+### Core Pillars & Architecture
+
+Kubeflow operates as a set of composable, loosely coupled components and microservices. The following table summarize the component, a brief description and a reference to the GithHub repository.
+
+| Component | Description | GitHub Repository |
+| --- | --- | --- |
+| **Central Dashboard** | Kubeflow Dashboard is the web-based hub of a Kubeflow Platform. It exposes the access controlled web interfaces for Kubeflow components and more. | [kubeflow/dashboard](https://github.com/kubeflow/dashboard) |
+| **Kubeflow Pipelines (KFP)** | A containerized workflow orchestrator used to build, execute, and automate multi-step ML pipelines. Uses Python to compose computational Directed Acyclic Graphs (DAGs) with automatic task caching and artifact tracking. | [kubeflow/pipelines](https://github.com/kubeflow/pipelines) |
+| **Model Serving (KServe)** | The cloud-native model serving engine. Provides a standardized Kubernetes Custom Resource (InferenceService and LLMInferenceService) to deploy both predictive and generative AI models with autoscaling (including scale-to-zero), canary rollouts, and support for runtimes like PyTorch, vLLM, and Triton. | [kserve/kserve](https://github.com/kserve/kserve) |
+| **Training & Fine-Tuning (Kubeflow Trainer)** | Kubeflow Trainer is a Kubernetes-native distributed AI platform for scalable large language model (LLM) fine-tuning and training of AI models across a wide range of frameworks, including PyTorch, MLX, HuggingFace, DeepSpeed, Megatron-LM, JAX, XGBoost, and more. | [kubeflow/trainer](https://github.com/kubeflow/trainer) |
+| **Automated Hyperparameter Tuning (Katib)** | Manages hyperparameter optimization (HPO) and neural architecture search (NAS), automatically spawning parallel trials to find optimal model configurations. | [kubeflow/katib](https://github.com/kubeflow/katib) |
+| **Notebook Environments (V1)** | Provisioning tool for interactive Jupyter, RStudio, or VS Code server instances running directly within the Kubernetes cluster, pre-configured with GPU access and persistent storage volumes. | [kubeflow/notebooks](https://github.com/kubeflow/notebooks/tree/notebooks-v1) |
+| **Model Registry (Hub)** | Centralized metadata repository and catalog for tracking ML model versions, lineages, and artifacts. | [kubeflow/hub](https://github.com/kubeflow/hub) |
+
+## Deployment
+
+The common deployment of Kubeflow assumes the following controls:
+
+1. The services are always deployed on Kubernetes, behind an ingress provided by Istio, that takes care of ingress, encryption and authentication.
+2. Intra-cluster communication is secured using Istio Ambient mesh to isolate namespaces and services, and restrict traffic between them
+3. OAuth2Proxy is used to manage the user sessions. 
+4. The Kubernetes cluster can be hardened, and Kubeflow can run with [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) set to `baseline`, limiting possible privilege escalation.
+
+# Assessment
+
+Assess whether the following CVE applies to the relevant project repositories and whether the listed images expose the vulnerable code path.
+
+Provide an assessment for each image by classifying the severity of the CVE in these categories:
+
+* **False positive**: the affected package may be present, but the vulnerable code path or configuration is not used.
+* **Mitigated**: the vulnerable code path is present, but one or more stated controls materially reduce exploitability.
+* **Exploitable**: the vulnerable code path is present and the stated controls do not materially prevent exploitation.
+
+Do not assume that package presence alone proves exploitability. Distinguish verified facts from assumptions and missing evidence. Use **Indeterminate** instead of inferring a classification when required evidence is unavailable or contradictory. Cite relevant source URLs when available.
+
+## Output
+
+Provide a table where for each image return:
+
+1. Classification: exactly one of **False positive**, **Mitigated**, or **Exploitable**.
+2. Rationale, including the vulnerable code path and required preconditions.
+3. Relevant deployment controls that fully or partially mitigates the issue.
+4. Confidence: **Low**, **Medium**, or **High**.
+
+## CVE Details
+
+CVE ID: ${cve_id}
+NVD Severity: ${severity}
+NVD Description: ${description}
+Affected images:
+${image_list}
+
+Scanner findings:
+| Image | Package | Installed version | Scanner severity |
+| --- | --- | --- | --- |
+${finding_rows}

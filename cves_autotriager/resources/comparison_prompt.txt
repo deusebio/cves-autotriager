@@ -1,0 +1,17 @@
+You are evaluating independent security triage analyses.
+
+Original triage prompt:
+${original_prompt}
+
+Candidate responses, encoded as JSON by model name:
+${responses}
+
+Compare the responses for factual grounding, security relevance, assumptions, completeness, and actionable recommendations. Identify agreements and contradictions. Conclude with the strongest supported assessment, and do not decide based only on writing style or model identity. Use **Indeterminate** when the candidate responses and supplied evidence do not support a defensible classification; do not resolve uncertainty by majority vote.
+
+Return:
+1. Classification: exactly one of **False positive**, **Mitigated**, or **Exploitable**.
+2. Rationale supporting the classification, separating corroborated facts from unsupported claims.
+3. Relevant controls and whether each fully or partially mitigates the issue.
+4. Contradictions, missing evidence, and checks needed to resolve uncertainty.
+5. Confidence: **Low**, **Medium**, or **High**.
+6. The candidate model that provided the most accurate assessment, with a brief reason.
