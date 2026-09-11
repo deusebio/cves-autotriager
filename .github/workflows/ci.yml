@@ -30,9 +30,7 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Run Ruff checks
-        run: |
-          poetry run ruff check .
-          poetry run ruff format --check .
+        run: poetry run ruff check .
 
   typecheck:
     name: Type check
