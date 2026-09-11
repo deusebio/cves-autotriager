@@ -32,3 +32,5 @@ coverage.xml
 .idea/
 *.swp
 .DS_Store
+
+data

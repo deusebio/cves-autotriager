@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
@@ -16,9 +17,9 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from cves_autotriager.logging_utils import WithLogging
-from cves_autotriager.storage import Database, Table
+from cves_autotriager.storage import Database, SchemaType, Table
 
-RESPONSE_TABLE_SCHEMA = [
+RESPONSE_TABLE_SCHEMA: list[tuple[str, SchemaType]] = [
     ("timestamp", str),
     ("model_name", str),
     ("cve_id", str),
@@ -36,7 +37,7 @@ OUTPUT_COLUMNS = [
     "best_model",
 ]
 
-OUTPUT_TABLE_SCHEMA = [(column, str) for column in OUTPUT_COLUMNS]
+OUTPUT_TABLE_SCHEMA: list[tuple[str, SchemaType]] = [(column, str) for column in OUTPUT_COLUMNS]
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,7 @@ class ModelComparisonChain(WithLogging):
         """Generate candidate answers in parallel, then invoke the judge."""
         cached_responses: dict[str, str] = {}
         pending_model_names = []
-        for name, _model in self._candidate_models.items():
+        for name in self._candidate_models:
             cached = self._get_cached_response(
                 self._candidate_table,
                 model_name=name,
@@ -177,10 +178,10 @@ class ModelComparisonChain(WithLogging):
             table_format=self._output_format,
         )
 
-        comparison = self._get_or_invoke_judge(prompt, comparison_prompt, cve_id)
+        comparison = self._get_or_invoke_judge(comparison_prompt, cve_id)
         return ComparisonResult(prompt, responses, comparison, self._output_format)
 
-    def _timed_invoke(self, model: BaseChatModel):
+    def _timed_invoke(self, model: BaseChatModel) -> Callable[[str], dict[str, str | float]]:
         def _run(_prompt: str) -> dict[str, str | float]:
             started = time.perf_counter()
             try:
@@ -199,7 +200,6 @@ class ModelComparisonChain(WithLogging):
 
     def _get_or_invoke_judge(
         self,
-        prompt: str,
         comparison_prompt: str,
         cve_id: str,
     ) -> str:

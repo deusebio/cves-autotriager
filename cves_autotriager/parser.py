@@ -102,7 +102,6 @@ class NVDEnricher(WithLogging):
         self.request_delay = request_delay
 
     def _get_cve_details(self, cve_id: str) -> dict[str, DataType]:
-
         if self.table and (cached := self.table.find_one("id", cve_id)) is not None:
             self.logger.debug(f"Found CVE with id {cve_id}")
             return cached
@@ -111,7 +110,11 @@ class NVDEnricher(WithLogging):
         details = self._fetch_cve_details(cve_id)
 
         if "error" in details:
-            self.logger.warning(f"There has been an error fetching CVE details for {cve_id}: {details['error']}")
+            error = details["error"]
+            error_message = error.decode() if isinstance(error, bytes) else str(error)
+            self.logger.warning(
+                f"There has been an error fetching CVE details for {cve_id}: " f"{error_message}"
+            )
             return details
 
         if self.table:
@@ -131,9 +134,9 @@ class NVDEnricher(WithLogging):
                 "id": cve_id,
                 "nvd_description": vuln.get("descriptions", [{}])[0].get("value"),
                 "nvd_severity": vuln.get("metrics", {})
-                    .get("cvssMetricV31", [{}])[0]
-                    .get("cvssData", {})
-                    .get("baseSeverity"),
+                .get("cvssMetricV31", [{}])[0]
+                .get("cvssData", {})
+                .get("baseSeverity"),
             }
         except requests.RequestException as error:
             return {"id": cve_id, "error": str(error)}

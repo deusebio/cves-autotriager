@@ -54,8 +54,10 @@ def test_builder_populates_cve_and_unique_images() -> None:
     assert "* image-one:1.0\n* image-two:2.0" in prompt
     assert "| image-one:1.0 | openssl | 3.0.1 | HIGH |" in prompt
     assert "| image-two:2.0 | libssl3 | 3.0.2 | HIGH |" in prompt
-    assert "**Indeterminate**" in prompt
-    assert "when required evidence is unavailable or contradictory" in prompt
+    assert "**False positive**" in prompt
+    assert "**Mitigated**" in prompt
+    assert "**Exploitable**" in prompt
+    assert "Do not assume that package presence alone proves exploitability" in prompt
     assert "other-image:1.0" not in prompt
 
 
