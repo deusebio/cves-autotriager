@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install "poetry>=2.0,<3.0"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run Ruff checks
+        run: poetry run ruff check .
+
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install "poetry>=2.0,<3.0"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run mypy
+        run: poetry run mypy cves_autotriager
+
+  unittest:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install "poetry>=2.0,<3.0"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run pytest
+        run: poetry run pytest
