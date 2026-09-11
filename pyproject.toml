@@ -9,6 +9,7 @@ dependencies = [
 	"envyaml>=1.10",
 	"langchain[anthropic,openai,deepseek]>=1.1",
 	"pandas>=2.0",
+	"pyyaml>=6.0",
 	"requests>=2.32",
 ]
 

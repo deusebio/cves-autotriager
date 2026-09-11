@@ -41,7 +41,7 @@ Provide an assessment for each image by classifying the severity of the CVE in t
 * **Mitigated**: the vulnerable code path is present, but one or more stated controls materially reduce exploitability.
 * **Exploitable**: the vulnerable code path is present and the stated controls do not materially prevent exploitation.
 
-Do not assume that package presence alone proves exploitability. Distinguish verified facts from assumptions and missing evidence. Use **Indeterminate** instead of inferring a classification when required evidence is unavailable or contradictory. Cite relevant source URLs when available.
+Do not assume that package presence alone proves exploitability. Distinguish verified facts from assumptions and missing evidence. Cite relevant source URLs when available.
 
 ## Output
 

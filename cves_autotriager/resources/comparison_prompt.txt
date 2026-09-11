@@ -1,4 +1,4 @@
-You are evaluating independent security triage analyses.
+You are evaluating independent security triage analyses, to gather the analyses from others models to summarize those in a single output.
 
 Original triage prompt:
 ${original_prompt}
@@ -6,12 +6,33 @@ ${original_prompt}
 Candidate responses, encoded as JSON by model name:
 ${responses}
 
-Compare the responses for factual grounding, security relevance, assumptions, completeness, and actionable recommendations. Identify agreements and contradictions. Conclude with the strongest supported assessment, and do not decide based only on writing style or model identity. Use **Indeterminate** when the candidate responses and supplied evidence do not support a defensible classification; do not resolve uncertainty by majority vote.
+Compare the responses for factual grounding, security relevance, assumptions, completeness, and actionable recommendations. Identify agreements and contradictions. Conclude with the strongest supported assessment, and do not decide based only on writing style or model identity. 
 
-Return:
-1. Classification: exactly one of **False positive**, **Mitigated**, or **Exploitable**.
-2. Rationale supporting the classification, separating corroborated facts from unsupported claims.
-3. Relevant controls and whether each fully or partially mitigates the issue.
-4. Contradictions, missing evidence, and checks needed to resolve uncertainty.
-5. Confidence: **Low**, **Medium**, or **High**.
-6. The candidate model that provided the most accurate assessment, with a brief reason.
+As output, provide **ONLY** a table in ${table_format} format. For each image provide
+
+1. Classification (`classification`): exactly one of **False positive**, **Mitigated**, or **Exploitable**.
+2. Rationale (`rationale`): providing information supporting the classification
+3. Controls (`controls`): providing the relevant controls that fully or partially mitigates the issue.
+4. Confidence (`confidence`): exactly one of **Low**, **Medium**, or **High**.
+5. Best model (`best_model`): The candidate model name that provided the most accurate assessment.
+
+Use the labels in the bracket and between back ticks as column name for the table.
+
+If multiple images share the same output, you can merge the rows into a single one with the images that are separated by `;`.
+
+For YAML output format, use a list of dictionaries, like:
+
+```
+- image: image1
+  classification: ...
+  rationale: ...
+  controls: ...
+  confidence: ...
+  best_model: ...
+- image: image1;image2
+  classification: ...
+  rationale: ...
+  controls: ...
+  confidence: ...
+  best_model: ...
+```
