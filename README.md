@@ -53,7 +53,7 @@ Compare CVE analyses from multiple LangChain models and aggregate the results us
 from langchain.chat_models import init_chat_model
 
 from cves_autotriager import CVEPromptBuilder, NVDEnricher, SQLiteClient, TrivyReportParser
-from cves_autotriager.llm import OUTPUT_TABLE_SCHEMA, ModelComparisonChain
+from cves_autotriager.llm.langchain import OUTPUT_TABLE_SCHEMA, ModelComparisonChain
 
 cve_id = "..."
 
@@ -64,7 +64,7 @@ model_names = [
 	"openrouter:z-ai/glm-5.3-flash",
 	"openrouter:minimax/minimax-m3",
 ]
-models = {name: init_chat_model(name) for name in model_names}
+models = [init_chat_model(name) for name in model_names]
 judge = init_chat_model("openrouter:deepseek/deepseek-v4-flash-0731")
 
 result = ModelComparisonChain(
@@ -82,7 +82,7 @@ the cached response is reused instead of calling the model provider again.
 When the output of the comparison model is `yaml`, the summary of assessment can also be then stored in a table using `ComparisonResult.write(...)`:
 
 ```python
-from cves_autotriager.llm import OUTPUT_TABLE_SCHEMA
+from cves_autotriager.llm.langchain import OUTPUT_TABLE_SCHEMA
 
 output_table = (
 	database.get_table("output")

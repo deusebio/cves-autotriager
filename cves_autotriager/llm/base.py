@@ -1,10 +1,10 @@
-"""Run and compare CVE triage responses from LangChain chat models."""
+"""Shared abstractions for LLM-backed CVE triage comparisons."""
 
 from __future__ import annotations
 
+import asyncio
 import json
-import time
-from collections.abc import Callable
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
@@ -12,9 +12,6 @@ from string import Template
 from typing import Any
 
 import yaml
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
-from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from cves_autotriager.logging_utils import WithLogging
 from cves_autotriager.storage import Database, SchemaType, Table
@@ -38,6 +35,14 @@ OUTPUT_COLUMNS = [
 ]
 
 OUTPUT_TABLE_SCHEMA: list[tuple[str, SchemaType]] = [(column, str) for column in OUTPUT_COLUMNS]
+
+
+@dataclass(frozen=True)
+class TimedResponse:
+    """Text response and elapsed wall-clock time for one model invocation."""
+
+    response: str
+    execution_time: float
 
 
 @dataclass(frozen=True)
@@ -107,144 +112,51 @@ class ComparisonResult:
         return str(value)
 
 
-class ModelComparisonChain(WithLogging):
-    """Send one prompt to candidate models and compare their responses."""
+class BaseModelComparisonChain(WithLogging, ABC):
+    """Common cache, prompt-building, and result assembly for comparison chains."""
 
     def __init__(
         self,
-        models: dict[str, BaseChatModel],
-        judge: BaseChatModel,
+        candidate_model_names: list[str],
+        judge_model_name: str,
         *,
-        database: Database | None = None,
-        candidate_table_name: str = "candidate_responses",
-        judge_table_name: str = "judge_responses",
+        candidate_table: Table | None = None,
+        judge_table: Table | None = None,
         comparison_template_name: str = "comparison_prompt.txt",
         output_format: str = "markdown",
     ) -> None:
-        if len(models) < 2:
+        if len(candidate_model_names) < 2:
             raise ValueError("At least two candidate models are required")
-        if len(models) != len(set(models)):
+        if len(candidate_model_names) != len(set(candidate_model_names)):
             raise ValueError("Candidate model names must be unique")
 
+        self._candidate_model_names = candidate_model_names
+        self._judge_model_name = judge_model_name
+        self._candidate_table = candidate_table
+        self._judge_table = judge_table
         self._output_format = output_format
+        self._validate_response_table(self._candidate_table)
+        self._validate_response_table(self._judge_table)
 
         template_path = resources.files("cves_autotriager.resources").joinpath(
             comparison_template_name
         )
         self._template = Template(template_path.read_text(encoding="utf-8"))
-        self._candidate_models = dict(models)
-        self._candidates = RunnableParallel(self._candidate_models)
-        self._judge = judge
-
-        # Initialize database and tables
-        self._database = database
-        self._candidate_table = (
-            self._ensure_table(database, candidate_table_name) if database is not None else None
-        )
-        self._judge_table = (
-            self._ensure_table(database, judge_table_name) if database is not None else None
-        )
 
     def invoke(self, prompt: str, cve_id: str = "unknown") -> ComparisonResult:
-        """Generate candidate answers in parallel, then invoke the judge."""
-        cached_responses: dict[str, str] = {}
-        pending_model_names = []
-        for name in self._candidate_models:
-            cached = self._get_cached_response(
-                self._candidate_table,
-                model_name=name,
-                cve_id=cve_id,
-                prompt=prompt,
-            )
-            if cached is not None:
-                cached_responses[name] = cached
-            else:
-                pending_model_names.append(name)
+        """Synchronously run the comparison workflow."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.ainvoke(prompt, cve_id))
+        raise RuntimeError("Use ainvoke() when calling from an active asyncio event loop")
 
-        if pending_model_names:
-            timed_models = {
-                name: RunnableLambda(self._timed_invoke(model))
-                for name, model in self._candidate_models.items()
-                if name in pending_model_names
-            }
-            raw_results = RunnableParallel(timed_models).invoke(prompt)
-            for name, result in raw_results.items():
-                if "response" in result:
-                    response = result["response"]
-                    execution_time = float(result["execution_time"])
-                    self._store_response(
-                        self._candidate_table,
-                        model_name=name,
-                        cve_id=cve_id,
-                        prompt=prompt,
-                        response=response,
-                        execution_time=execution_time,
-                    )
-                    cached_responses[name] = response
-                elif "error" in result:
-                    self.logger.error(f"Error invoking model {name}: {result['error']}")
-
-        responses = cached_responses
-        comparison_prompt = self._template.substitute(
-            original_prompt=prompt,
-            responses=json.dumps(responses, indent=2, sort_keys=True),
-            table_format=self._output_format,
-        )
-
-        comparison = self._get_or_invoke_judge(comparison_prompt, cve_id)
+    async def ainvoke(self, prompt: str, cve_id: str = "unknown") -> ComparisonResult:
+        """Generate candidate answers, compare them, and return a result object."""
+        responses = await self._get_or_invoke_candidates(prompt, cve_id)
+        comparison_prompt = self._build_comparison_prompt(prompt, responses)
+        comparison = await self._get_or_invoke_judge(comparison_prompt, cve_id)
         return ComparisonResult(prompt, responses, comparison, self._output_format)
-
-    def _timed_invoke(self, model: BaseChatModel) -> Callable[[str], dict[str, str | float]]:
-        def _run(_prompt: str) -> dict[str, str | float]:
-            started = time.perf_counter()
-            try:
-                raw_response = model.invoke(_prompt)
-            except Exception as error:
-                return {"error": str(error)}
-
-            execution_time = time.perf_counter() - started
-            response = self._message_text(raw_response)
-            return {
-                "response": response,
-                "execution_time": execution_time,
-            }
-
-        return _run
-
-    def _get_or_invoke_judge(
-        self,
-        comparison_prompt: str,
-        cve_id: str,
-    ) -> str:
-        cached = self._get_cached_response(
-            self._judge_table,
-            model_name=self._judge_name,
-            cve_id=cve_id,
-            prompt=comparison_prompt,
-        )
-        if cached is not None:
-            return cached
-
-        started = time.perf_counter()
-        comparison = self._message_text(self._judge.invoke(comparison_prompt))
-        execution_time = time.perf_counter() - started
-        self._store_response(
-            self._judge_table,
-            model_name=self._judge_name,
-            cve_id=cve_id,
-            prompt=comparison_prompt,
-            response=comparison,
-            execution_time=execution_time,
-        )
-        return comparison
-
-    @property
-    def _judge_name(self) -> str:
-        for attr in ("model_name", "model", "name"):
-            value = getattr(self._judge, attr, None)
-            if isinstance(value, str) and value:
-                return value
-        return "judge"
 
     @staticmethod
     def _ensure_table(database: Database | None, table_name: str) -> Table:
@@ -253,6 +165,78 @@ class ModelComparisonChain(WithLogging):
         if table_name not in database.tables:
             return database.create_table(table_name, RESPONSE_TABLE_SCHEMA)
         return database.get_table(table_name)
+
+    async def _get_or_invoke_candidates(self, prompt: str, cve_id: str) -> dict[str, str]:
+        cached_responses: dict[str, str] = {}
+        pending_model_names: list[str] = []
+        for model_name in self._candidate_model_names:
+            cached = self._get_cached_response(
+                self._candidate_table,
+                model_name=model_name,
+                cve_id=cve_id,
+                prompt=prompt,
+            )
+            if cached is None:
+                pending_model_names.append(model_name)
+            else:
+                cached_responses[model_name] = cached
+
+        if pending_model_names:
+            pending_results = await self._invoke_candidate_models(pending_model_names, prompt)
+            for model_name, result in pending_results.items():
+                cached_responses[model_name] = result.response
+                self._store_response(
+                    self._candidate_table,
+                    model_name=model_name,
+                    cve_id=cve_id,
+                    prompt=prompt,
+                    response=result.response,
+                    execution_time=result.execution_time,
+                )
+
+        return {
+            model_name: cached_responses[model_name]
+            for model_name in self._candidate_model_names
+            if model_name in cached_responses
+        }
+
+    def _build_comparison_prompt(self, prompt: str, responses: dict[str, str]) -> str:
+        return self._template.substitute(
+            original_prompt=prompt,
+            responses=json.dumps(responses, indent=2, sort_keys=True),
+            table_format=self._output_format,
+        )
+
+    async def _get_or_invoke_judge(self, comparison_prompt: str, cve_id: str) -> str:
+        cached = self._get_cached_response(
+            self._judge_table,
+            model_name=self._judge_model_name,
+            cve_id=cve_id,
+            prompt=comparison_prompt,
+        )
+        if cached is not None:
+            return cached
+
+        result = await self._invoke_judge_model(comparison_prompt)
+        self._store_response(
+            self._judge_table,
+            model_name=self._judge_model_name,
+            cve_id=cve_id,
+            prompt=comparison_prompt,
+            response=result.response,
+            execution_time=result.execution_time,
+        )
+        return result.response
+
+    @abstractmethod
+    async def _invoke_candidate_models(
+        self, model_names: list[str], prompt: str
+    ) -> dict[str, TimedResponse]:
+        """Invoke pending candidate models and return responses by model name."""
+
+    @abstractmethod
+    async def _invoke_judge_model(self, prompt: str) -> TimedResponse:
+        """Invoke the judge model and return its timed response."""
 
     def _get_cached_response(
         self,
@@ -300,7 +284,11 @@ class ModelComparisonChain(WithLogging):
         )
 
     @staticmethod
-    def _message_text(message: object) -> str:
-        if not isinstance(message, BaseMessage):
-            raise TypeError(f"Expected a LangChain message, found {type(message).__name__}")
-        return message.text
+    def _validate_response_table(table: Table | None) -> None:
+        if table is None:
+            return
+        if table.schema != RESPONSE_TABLE_SCHEMA:
+            raise ValueError(
+                f"Response table schema mismatch: expected {RESPONSE_TABLE_SCHEMA}, "
+                f"found {table.schema}"
+            )

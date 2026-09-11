@@ -4,13 +4,14 @@ version = "0.1.0"
 description = "Automated triage tooling for CVEs."
 authors = [{ name = "Enrico Deusebio" }]
 readme = "README.md"
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.11,<4.0"
 dependencies = [
 	"envyaml>=1.10",
 	"langchain[anthropic,openai,deepseek]>=1.1",
 	"pandas>=2.0",
 	"pyyaml>=6.0",
 	"requests>=2.32",
+	"github-copilot-sdk (>=1.0.13,<2.0.0)",
 ]
 
 [project.scripts]

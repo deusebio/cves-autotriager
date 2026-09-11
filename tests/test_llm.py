@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from cves_autotriager.llm import OUTPUT_TABLE_SCHEMA, ComparisonResult, ModelComparisonChain
+from cves_autotriager.llm.base import (
+    OUTPUT_TABLE_SCHEMA,
+    ComparisonResult,
+)
+from cves_autotriager.llm.langchain import (
+    ModelComparisonChain,
+)
 from cves_autotriager.storage import SQLiteClient
 
 
@@ -14,14 +20,14 @@ def test_comparison_chain_fans_out_prompt_and_invokes_judge() -> None:
     judge = FakeListChatModel(responses=["second is better supported"])
 
     result = ModelComparisonChain(
-        {"first": first, "second": second},
+        [first, second],
         judge,
     ).invoke("Assess CVE-2026-1234")
 
     assert result.prompt == "Assess CVE-2026-1234"
     assert result.responses == {
-        "first": "first analysis",
-        "second": "second analysis",
+        "candidate_0": "first analysis",
+        "candidate_1": "second analysis",
     }
     assert result.comparison == "second is better supported"
 
@@ -47,7 +53,7 @@ def test_comparison_chain_caches_candidate_and_judge_responses(tmp_path: Path) -
     judge = FakeListChatModel(responses=["second is better supported"])
 
     chain = ModelComparisonChain(
-        {"first": first, "second": second},
+        [first, second],
         judge,
         database=database,
         candidate_table_name="candidate_responses",
@@ -58,8 +64,8 @@ def test_comparison_chain_caches_candidate_and_judge_responses(tmp_path: Path) -
     second_result = chain.invoke("Assess CVE-2026-1234", cve_id="CVE-2026-1234")
 
     assert first_result.responses == {
-        "first": "first analysis",
-        "second": "second analysis",
+        "candidate_0": "first analysis",
+        "candidate_1": "second analysis",
     }
     assert second_result.responses == first_result.responses
     assert second_result.comparison == first_result.comparison
@@ -68,7 +74,10 @@ def test_comparison_chain_caches_candidate_and_judge_responses(tmp_path: Path) -
     judge_rows = list(database.get_table("judge_responses").rows())
     assert len(candidate_rows) == 2
     assert len(judge_rows) == 1
-    assert {row["model_name"] for row in candidate_rows} == {"first", "second"}
+    assert {row["model_name"] for row in candidate_rows} == {
+        "candidate_0",
+        "candidate_1",
+    }
     assert all(row["cve_id"] == "CVE-2026-1234" for row in candidate_rows + judge_rows)
 
 
