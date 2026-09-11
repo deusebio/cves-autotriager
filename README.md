@@ -106,3 +106,6 @@ Type-check:
 ```bash
 poetry run mypy cves_autotriager
 ```
+
+GitHub Actions runs the same lint, type-check, and unit-test commands in three
+parallel jobs on every push and pull request.
