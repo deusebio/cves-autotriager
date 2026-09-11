@@ -104,6 +104,40 @@ def test_comparison_result_writes_yaml_output_to_table(tmp_path: Path) -> None:
     ]
 
 
+def test_comparison_result_writes_fenced_yaml_with_leading_prefix(tmp_path: Path) -> None:
+    database = SQLiteClient(tmp_path).get_database("triage")
+    output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
+    result = ComparisonResult(
+        prompt="Assess CVE-2026-4035",
+        responses={},
+        comparison=(
+            ":\n"
+            "```yaml\n"
+            "- image: image-one;image-two\n"
+            "  classification: False positive\n"
+            "  rationale: Package is present but service is not exposed\n"
+            "  controls: Service is absent\n"
+            "  confidence: High\n"
+            "  best_model: openrouter:minimax/minimax-m3\n"
+            "```\n"
+        ),
+        output="yaml",
+    )
+
+    result.write(output)
+
+    assert list(output.rows()) == [
+        {
+            "image": "image-one;image-two",
+            "classification": "False positive",
+            "rationale": "Package is present but service is not exposed",
+            "controls": "Service is absent",
+            "confidence": "High",
+            "best_model": "openrouter:minimax/minimax-m3",
+        }
+    ]
+
+
 def test_comparison_result_write_requires_yaml_output(tmp_path: Path) -> None:
     database = SQLiteClient(tmp_path).get_database("triage")
     output = database.create_table("output", OUTPUT_TABLE_SCHEMA)

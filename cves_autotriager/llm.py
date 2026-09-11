@@ -60,7 +60,7 @@ class ComparisonResult:
                 f"found {table_columns}"
             )
 
-        parsed = yaml.safe_load(self._strip_code_fence(self.comparison))
+        parsed = yaml.safe_load(self._extract_yaml_document(self.comparison))
         if not isinstance(parsed, list):
             raise ValueError("YAML output must be a list of dictionaries")
 
@@ -69,11 +69,24 @@ class ComparisonResult:
             table.insert(*rows)
 
     @staticmethod
-    def _strip_code_fence(text: str) -> str:
+    def _extract_yaml_document(text: str) -> str:
         stripped = text.strip()
         lines = stripped.splitlines()
-        if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-            return "\n".join(lines[1:-1]).strip()
+
+        for index, line in enumerate(lines):
+            if line.strip().startswith("```"):
+                yaml_lines = []
+                for fenced_line in lines[index + 1 :]:
+                    if fenced_line.strip() == "```":
+                        break
+                    yaml_lines.append(fenced_line)
+                if yaml_lines:
+                    return "\n".join(yaml_lines).strip()
+
+        for index, line in enumerate(lines):
+            if line.lstrip().startswith("- "):
+                return "\n".join(lines[index:]).strip()
+
         return stripped
 
     @staticmethod
