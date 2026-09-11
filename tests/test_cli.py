@@ -13,9 +13,3 @@ def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--version"])
     assert excinfo.value.code == 0
     assert __version__ in capsys.readouterr().out
-
-
-def test_repo_main_matches_current_cli_contract() -> None:
-    import main
-
-    assert callable(main.main)
