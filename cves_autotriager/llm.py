@@ -44,8 +44,10 @@ OUTPUT_TABLE_SCHEMA: list[tuple[str, SchemaType]] = [(column, str) for column in
 class ComparisonResult:
     """Candidate model responses and the judge model's comparison."""
 
+    cve_id: str
     prompt: str
     responses: dict[str, str]
+    comparison_prompt: str
     comparison: str
     output: str
 
@@ -192,7 +194,14 @@ class ModelComparisonChain(WithLogging):
         )
 
         comparison = self._get_or_invoke_judge(comparison_prompt, cve_id)
-        return ComparisonResult(prompt, responses, comparison, self._output_format)
+        return ComparisonResult(
+            cve_id=cve_id,
+            prompt=prompt,
+            responses=responses,
+            comparison_prompt=comparison_prompt,
+            comparison=comparison,
+            output=self._output_format,
+        )
 
     def _timed_invoke(self, model: BaseChatModel) -> Callable[[str], dict[str, str | float]]:
         def _run(_prompt: str) -> dict[str, str | float]:

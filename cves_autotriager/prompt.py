@@ -39,7 +39,7 @@ class CVEPromptBuilder:
         if not images:
             raise ValueError(f"CVE has no affected images: {cve_id}")
 
-        severity = self._single_value(matching_cves, "nvd_severity", cve_id)
+        severity = self._single_value(matching_cves, "severity", cve_id)
         description = self._single_value(matching_cves, "nvd_description", cve_id)
         image_list = "\n".join(f"* {image}" for image in images)
         findings = matching_cves[["image", "package", "version", "severity"]].drop_duplicates()

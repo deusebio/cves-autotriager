@@ -16,9 +16,10 @@ def test_comparison_chain_fans_out_prompt_and_invokes_judge() -> None:
     result = ModelComparisonChain(
         {"first": first, "second": second},
         judge,
-    ).invoke("Assess CVE-2026-1234")
+    ).invoke("Assess CVE-2026-1234", cve_id="CVE-2026-1234")
 
     assert result.prompt == "Assess CVE-2026-1234"
+    assert result.cve_id == "CVE-2026-1234"
     assert result.responses == {
         "first": "first analysis",
         "second": "second analysis",
@@ -76,8 +77,10 @@ def test_comparison_result_writes_yaml_output_to_table(tmp_path: Path) -> None:
     database = SQLiteClient(tmp_path).get_database("triage")
     output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
     result = ComparisonResult(
+        cve_id="CVE-2026-1234",
         prompt="Assess CVE-2026-1234",
         responses={},
+        comparison_prompt="Compare analyses for CVE-2026-1234",
         comparison=(
             "- image: ubuntu:1.11\n"
             "  classification: Mitigated\n"
@@ -108,8 +111,10 @@ def test_comparison_result_writes_fenced_yaml_with_leading_prefix(tmp_path: Path
     database = SQLiteClient(tmp_path).get_database("triage")
     output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
     result = ComparisonResult(
+        cve_id="CVE-2026-4035",
         prompt="Assess CVE-2026-4035",
         responses={},
+        comparison_prompt="Compare analyses for CVE-2026-4035",
         comparison=(
             ":\n"
             "```yaml\n"
@@ -142,8 +147,10 @@ def test_comparison_result_write_requires_yaml_output(tmp_path: Path) -> None:
     database = SQLiteClient(tmp_path).get_database("triage")
     output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
     result = ComparisonResult(
+        cve_id="CVE-2026-1234",
         prompt="Assess CVE-2026-1234",
         responses={},
+        comparison_prompt="Compare analyses for CVE-2026-1234",
         comparison="| Image | Classification |",
         output="markdown",
     )
