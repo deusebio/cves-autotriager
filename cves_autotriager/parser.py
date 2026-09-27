@@ -177,7 +177,7 @@ class ImageReference:
         return None
 
     @classmethod
-    def parse_many(cls, image_references: str, separator=";") -> set[ImageReference]:
+    def parse_many(cls, image_references: str, separator: str=";") -> set[ImageReference]:
         """Parse semicolon-separated image references, rejecting invalid entries."""
         parsed: set[ImageReference] = set()
         for reference in image_references.split(separator):
