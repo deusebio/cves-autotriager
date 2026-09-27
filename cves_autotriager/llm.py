@@ -18,6 +18,11 @@ from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from cves_autotriager.logging_utils import WithLogging
 from cves_autotriager.storage import Database, SchemaType, Table
+from logging import getLogger
+
+
+logger = getLogger(__name__)
+
 
 RESPONSE_TABLE_SCHEMA: list[tuple[str, SchemaType]] = [
     ("timestamp", str),
@@ -29,6 +34,7 @@ RESPONSE_TABLE_SCHEMA: list[tuple[str, SchemaType]] = [
 ]
 
 OUTPUT_COLUMNS = [
+    "cve_id",
     "image",
     "classification",
     "rationale",
@@ -66,7 +72,7 @@ class ComparisonResult:
         if not isinstance(parsed, list):
             raise ValueError("YAML output must be a list of dictionaries")
 
-        rows = [self._yaml_row_to_table_values(row) for row in parsed]
+        rows = [self._yaml_row_to_table_values(self.cve_id, row) for row in parsed]
         if rows:
             table.insert(*rows)
 
@@ -92,13 +98,15 @@ class ComparisonResult:
         return stripped
 
     @staticmethod
-    def _yaml_row_to_table_values(row: object) -> list[str | None]:
+    def _yaml_row_to_table_values(cve_id: str, row: object) -> list[str | None]:
         if not isinstance(row, dict):
             raise ValueError("YAML output rows must be dictionaries")
 
-        missing_columns = sorted(set(OUTPUT_COLUMNS) - set(row))
+        missing_columns = sorted(set(OUTPUT_COLUMNS) - set(["cve_id"]) - set(row))
         if missing_columns:
             raise ValueError(f"YAML output is missing columns: {', '.join(missing_columns)}")
+
+        row["cve_id"] = cve_id
 
         return [ComparisonResult._yaml_value(row[column]) for column in OUTPUT_COLUMNS]
 
@@ -313,3 +321,43 @@ class ModelComparisonChain(WithLogging):
         if not isinstance(message, BaseMessage):
             raise TypeError(f"Expected a LangChain message, found {type(message).__name__}")
         return message.text
+
+
+def safe_save(result: ComparisonResult, judge: BaseChatModel, output_table: Table | None, count_max: int = 3) -> None:
+    
+    template_path = resources.files("cves_autotriager.resources").joinpath(
+        "error_handler.txt"
+    )
+
+    success = False
+    count = 0
+
+    while (not success) and (count<count_max):
+        count += 1
+        try:
+            result.write(output_table)
+            logger.info("Stored comparison output rows in table 'output' for CVE: %s", result.cve_id)
+            success = True
+        except Exception as e:
+            logger.error(f"[{count}/{count_max}] Failed to process CVE: {result.cve_id}. Error: {e}")
+
+            fix_prompt = Template(template_path.read_text(encoding="utf-8")).substitute(
+                prompt=result.comparison_prompt,
+                response=result.comparison,
+                exception=str(e),
+            )
+            logger.info(f"{fix_prompt}")
+            new_response = judge.invoke(fix_prompt).text
+            logger.info("Received new response from judge for CVE: %s", result.cve_id)
+            logger.info(f"{new_response}")
+            result = ComparisonResult(
+                cve_id=result.cve_id,
+                prompt = result.prompt,
+                responses=result.responses,
+                comparison_prompt=fix_prompt,
+                comparison=new_response,
+                output=result.output,
+            )
+
+    return success
+

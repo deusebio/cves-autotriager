@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 import requests
 
+from dataclasses import dataclass
 from cves_autotriager.logging_utils import WithLogging
 from cves_autotriager.storage import DataType, Table
 
@@ -153,3 +154,28 @@ class NVDEnricher(WithLogging):
             cve_details = self._get_cve_details(str(_id))
             enriched_cves.append({"id": _id, **cve_details, **row})
         return pd.DataFrame(enriched_cves)
+
+
+@dataclass(frozen=True)                                                                                                                                                                                            
+class ImageReference:                                                                                                                                                                                              
+    platform: str                                                                                                                                                                                                  
+    image: str                                                                                                                                                                                                     
+    tag: str | None = None                                                                                                                                                                                         
+                                                                                                                                                                                                                   
+    @classmethod                                                                                                                                                                                                   
+    def parse(cls, image_reference: str) -> 'ImageReference | None':                                                                                                                                               
+        import re                                                                                                                                                                                                  
+                                                                                                                                                                                                                   
+        pattern = r"^(?:(docker\.io|ghcr\.io)\/)?([a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+)(?:(?::|(?:@sha256:|@))([a-zA-Z0-9_.-]+))?$"                                                     
+                                                                                                                                                                                                                   
+        match = re.match(pattern, image_reference)                                                                                                                                                                 
+        if match:                                                                                                                                                                                                  
+            platform, name, tag = match.groups()                                                                                                                                                                   
+            return cls(platform or "docker.io", name, tag)                                                                                                                                                         
+                                                                                                                                                                                                                   
+        return None                                                                                                                                                                                                
+                                                                                                                                                                                                                   
+    @property                                                                                                                                                                                                      
+    def unpinned(self):                                                                                                                                                                                            
+        return ImageReference(self.platform, self.image)                                                                                                                                                           
+                                                                
