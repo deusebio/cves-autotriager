@@ -1,21 +1,23 @@
-from importlib import resources
-from string import Template
-
 from logging import getLogger
-import pandas as pd
 
+import pandas as pd
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
-from cves_autotriager.llm import OUTPUT_TABLE_SCHEMA, ModelComparisonChain, ComparisonResult, safe_save
+from cves_autotriager.llm import (
+    OUTPUT_TABLE_SCHEMA,
+    ModelComparisonChain,
+    safe_save,
+)
 from cves_autotriager.logging_utils import config_from_yaml
 from cves_autotriager.parser import ImageReference, NVDEnricher, TrivyReportParser
 from cves_autotriager.prompt import CVEPromptBuilder
-from cves_autotriager.storage import SQLiteClient
+from cves_autotriager.storage import SchemaType, SQLiteClient
 
 config_from_yaml()
 
 logger = getLogger(__name__)
+COUNT_MAX = 3
 
 df = TrivyReportParser("./data/1.11-ubuntu2/").to_dataframe()
 
@@ -27,7 +29,11 @@ client = SQLiteClient("./data/db")
 db = client.get_database("cves_autotriager")
 
 if "nvd" not in db.tables:
-    schema = [("id", str), ("nvd_description", str), ("nvd_severity", str)]
+    schema: list[tuple[str, SchemaType]] = [
+        ("id", str),
+        ("nvd_description", str),
+        ("nvd_severity", str),
+    ]
     nvd = db.create_table("nvd", schema)
 else:
     nvd = db.get_table("nvd")
@@ -60,23 +66,27 @@ cves_id = criticals["id"].unique().tolist()
 output_df = pd.DataFrame(output_table.rows())
 
 for cve_id in cves_id:
-
     logger.info("Processing CVE: %s", cve_id)
     selected_cves = criticals.loc[criticals["id"] == cve_id]
 
-    images = {
-        ImageReference.parse(image).unpinned 
-        for image in selected_cves["image"].unique().tolist()
-        }
-
-    left_over = images.difference([
-        ImageReference.parse(image).unpinned 
-        for image in output_df[output_df["cve_id"] == cve_id]["image"].unique().tolist()
-    ])
+    images = ImageReference.parse_many(";".join(selected_cves["image"].unique().tolist()))
+    processed_images = {
+        image.unpinned
+        for image_group in output_df.loc[output_df["cve_id"] == cve_id, "image"].dropna()
+        for image in ImageReference.parse_many(str(image_group))
+    }
+    left_over = images.difference(processed_images)
 
     if not left_over:
         logger.info("No new images to process for CVE: %s", cve_id)
         continue
+
+    unprocessed_image_names = {
+        image_name
+        for image_name in selected_cves["image"].unique().tolist()
+        if (image := ImageReference.parse(image_name)) is not None and image.unpinned in left_over
+    }
+    selected_cves = selected_cves.loc[selected_cves["image"].isin(unprocessed_image_names)]
 
     try:
         enriched = enricher.enrich(selected_cves)
@@ -99,8 +109,9 @@ for cve_id in cves_id:
         print(result.comparison)
         print()
 
-    success = safe_save(result, judge, output_table, count_max=3)
+    success = safe_save(result, judge, output_table, count_max=COUNT_MAX)
 
     if not success:
-        logger.error("Failed to store comparison output for CVE: %s after %d attempts.", cve_id, COUNT_MAX)
-
+        logger.error(
+            "Failed to store comparison output for CVE: %s after %d attempts.", cve_id, COUNT_MAX
+        )

@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from cves_autotriager.llm import OUTPUT_TABLE_SCHEMA, ComparisonResult, ModelComparisonChain
+from cves_autotriager.llm import (
+    OUTPUT_TABLE_SCHEMA,
+    ComparisonResult,
+    ModelComparisonChain,
+    safe_save,
+)
 from cves_autotriager.storage import SQLiteClient
 
 
@@ -35,7 +40,7 @@ def test_comparison_prompt_describes_yaml_output_contract() -> None:
     )
 
     assert "${table_format}" in template
-    assert "For YAML output format" in template
+    assert "If the output format is `YAML`" in template
     assert "classification:" in template
     assert "controls:" in template
     assert "best_model:" in template
@@ -97,6 +102,7 @@ def test_comparison_result_writes_yaml_output_to_table(tmp_path: Path) -> None:
     rows = list(output.rows())
     assert rows == [
         {
+            "cve_id": "CVE-2026-1234",
             "image": "ubuntu:1.11",
             "classification": "Mitigated",
             "rationale": "Patched package",
@@ -133,6 +139,7 @@ def test_comparison_result_writes_fenced_yaml_with_leading_prefix(tmp_path: Path
 
     assert list(output.rows()) == [
         {
+            "cve_id": "CVE-2026-4035",
             "image": "image-one;image-two",
             "classification": "False positive",
             "rationale": "Package is present but service is not exposed",
@@ -157,3 +164,84 @@ def test_comparison_result_write_requires_yaml_output(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="only supports yaml"):
         result.write(output)
+
+
+def test_safe_save_returns_true_when_yaml_is_valid(tmp_path: Path) -> None:
+    database = SQLiteClient(tmp_path).get_database("triage")
+    output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
+    result = ComparisonResult(
+        cve_id="CVE-2026-1234",
+        prompt="Assess CVE-2026-1234",
+        responses={},
+        comparison_prompt="Compare model responses",
+        comparison=(
+            "- cve_id: CVE-2026-1234\n"
+            "  image: ubuntu:latest\n"
+            "  classification: Mitigated\n"
+            "  rationale: Patched\n"
+            "  controls: Network policy\n"
+            "  confidence: High\n"
+            "  best_model: first\n"
+        ),
+        output="yaml",
+    )
+
+    assert safe_save(result, FakeListChatModel(responses=[]), output) is True
+    assert len(list(output.rows())) == 1
+
+
+def test_safe_save_repairs_invalid_yaml_and_saves_retry(tmp_path: Path) -> None:
+    database = SQLiteClient(tmp_path).get_database("triage")
+    output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
+    result = ComparisonResult(
+        cve_id="CVE-2026-1234",
+        prompt="Assess CVE-2026-1234",
+        responses={},
+        comparison_prompt="Compare model responses",
+        comparison="not valid YAML as a row",
+        output="yaml",
+    )
+    judge = FakeListChatModel(
+        responses=[
+            "- cve_id: CVE-2026-1234\n"
+            "  image: ubuntu:latest\n"
+            "  classification: Mitigated\n"
+            "  rationale: Patched\n"
+            "  controls: Network policy\n"
+            "  confidence: High\n"
+            "  best_model: first\n"
+        ]
+    )
+
+    assert safe_save(result, judge, output, count_max=2) is True
+    assert len(list(output.rows())) == 1
+
+
+def test_safe_save_returns_false_without_output_table() -> None:
+    result = ComparisonResult(
+        cve_id="CVE-2026-1234",
+        prompt="Assess CVE-2026-1234",
+        responses={},
+        comparison_prompt="Compare model responses",
+        comparison="- image: ubuntu:latest",
+        output="yaml",
+    )
+
+    assert safe_save(result, FakeListChatModel(responses=[]), None) is False
+
+
+def test_safe_save_returns_false_when_repair_attempt_is_exhausted(tmp_path: Path) -> None:
+    database = SQLiteClient(tmp_path).get_database("triage")
+    output = database.create_table("output", OUTPUT_TABLE_SCHEMA)
+    result = ComparisonResult(
+        cve_id="CVE-2026-1234",
+        prompt="Assess CVE-2026-1234",
+        responses={},
+        comparison_prompt="Compare model responses",
+        comparison="not valid YAML as a row",
+        output="yaml",
+    )
+    judge = FakeListChatModel(responses=["still not a YAML list"])
+
+    assert safe_save(result, judge, output, count_max=1) is False
+    assert list(output.rows()) == []
