@@ -1,3 +1,4 @@
+import asyncio
 from logging import getLogger
 
 import pandas as pd
@@ -6,6 +7,7 @@ from langchain_core.language_models import BaseChatModel
 
 from cves_autotriager.llm import (
     OUTPUT_TABLE_SCHEMA,
+    ComparisonResult,
     ModelComparisonChain,
     safe_save,
 )
@@ -64,6 +66,7 @@ model_chain = ModelComparisonChain(models, judge, database=db, output_format="ya
 cves_id = criticals["id"].unique().tolist()
 
 output_df = pd.DataFrame(output_table.rows(),columns=[column for column, _ in output_table.schema])
+pending_prompts: list[tuple[str, str]] = []
 
 for cve_id in cves_id:
     logger.info("Processing CVE: %s", cve_id)
@@ -94,10 +97,25 @@ for cve_id in cves_id:
     try:
         enriched = enricher.enrich(selected_cves)
         prompt = CVEPromptBuilder().build(cve_id, enriched)
-
-        result = model_chain.invoke(prompt, cve_id)
     except Exception as e:
         logger.error("Failed to process CVE: %s. Error: %s", cve_id, e)
+        continue
+
+    pending_prompts.append((cve_id, prompt))
+
+
+async def invoke_pending_prompts() -> list[ComparisonResult | BaseException]:
+    return await asyncio.gather(
+        *(model_chain.ainvoke(prompt, cve_id) for cve_id, prompt in pending_prompts),
+        return_exceptions=True,
+    )
+
+
+results = asyncio.run(invoke_pending_prompts())
+
+for (cve_id, _prompt), result in zip(pending_prompts, results, strict=True):
+    if isinstance(result, BaseException):
+        logger.error("Failed to process CVE: %s. Error: %s", cve_id, result)
         continue
 
     if False:

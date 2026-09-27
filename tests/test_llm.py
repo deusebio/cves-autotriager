@@ -1,3 +1,4 @@
+import asyncio
 from importlib import resources
 from pathlib import Path
 
@@ -76,6 +77,32 @@ def test_comparison_chain_caches_candidate_and_judge_responses(tmp_path: Path) -
     assert len(judge_rows) == 1
     assert {row["model_name"] for row in candidate_rows} == {"first", "second"}
     assert all(row["cve_id"] == "CVE-2026-1234" for row in candidate_rows + judge_rows)
+
+
+def test_comparison_chain_ainvoke_runs_and_caches_models(tmp_path: Path) -> None:
+    database = SQLiteClient(tmp_path).get_database("triage")
+    first = FakeListChatModel(responses=["first analysis"])
+    second = FakeListChatModel(responses=["second analysis"])
+    judge = FakeListChatModel(responses=["second is better supported"])
+    chain = ModelComparisonChain(
+        {"first": first, "second": second},
+        judge,
+        database=database,
+        candidate_table_name="candidate_responses",
+        judge_table_name="judge_responses",
+    )
+
+    first_result = asyncio.run(chain.ainvoke("Assess CVE-2026-1234", cve_id="CVE-2026-1234"))
+    cached_result = asyncio.run(chain.ainvoke("Assess CVE-2026-1234", cve_id="CVE-2026-1234"))
+
+    assert first_result.responses == {
+        "first": "first analysis",
+        "second": "second analysis",
+    }
+    assert cached_result.responses == first_result.responses
+    assert cached_result.comparison == first_result.comparison
+    assert len(list(database.get_table("candidate_responses").rows())) == 2
+    assert len(list(database.get_table("judge_responses").rows())) == 1
 
 
 def test_comparison_result_writes_yaml_output_to_table(tmp_path: Path) -> None:
