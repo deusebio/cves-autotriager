@@ -1,0 +1,12 @@
+A previous model failed to provide an answer compliant to the request, and as a result, the output could not be parsed. 
+
+1. Initial Prompt:
+${prompt}
+
+2. Response:
+${response}
+
+3. Exception of the parsing process:
+${exception}
+
+Please fix the response output to address the exception.
