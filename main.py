@@ -63,13 +63,16 @@ model_chain = ModelComparisonChain(models, judge, database=db, output_format="ya
 
 cves_id = criticals["id"].unique().tolist()
 
-output_df = pd.DataFrame(output_table.rows())
+output_df = pd.DataFrame(output_table.rows(),columns=[column for column, _ in output_table.schema])
 
 for cve_id in cves_id:
     logger.info("Processing CVE: %s", cve_id)
     selected_cves = criticals.loc[criticals["id"] == cve_id]
 
-    images = ImageReference.parse_many(";".join(selected_cves["image"].unique().tolist()))
+    images = {
+        image.unpinned
+        for image in ImageReference.parse_many(";".join(selected_cves["image"].unique().tolist()))
+    }
     processed_images = {
         image.unpinned
         for image_group in output_df.loc[output_df["cve_id"] == cve_id, "image"].dropna()
