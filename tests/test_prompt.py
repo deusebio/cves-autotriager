@@ -98,7 +98,7 @@ def test_builder_requires_id_column() -> None:
         CVEPromptBuilder().build("CVE-2026-1234", cves)
 
 
-def test_builder_rejects_missing_nvd_details() -> None:
+def test_builder_rejects_missing_nvd_description() -> None:
     cves = pd.DataFrame(
         [
             {
@@ -107,11 +107,11 @@ def test_builder_rejects_missing_nvd_details() -> None:
                 "package": "openssl",
                 "version": "3.0.1",
                 "severity": "HIGH",
-                "nvd_severity": None,
-                "nvd_description": "Example vulnerability",
+                "nvd_severity": "HIGH",
+                "nvd_description": None,
             }
         ]
     )
 
-    with pytest.raises(ValueError, match="no nvd_severity"):
+    with pytest.raises(ValueError, match="no nvd_description"):
         CVEPromptBuilder().build("CVE-2026-1234", cves)

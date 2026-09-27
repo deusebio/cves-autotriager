@@ -1,17 +1,23 @@
 from logging import getLogger
 
+import pandas as pd
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
-from cves_autotriager.llm import OUTPUT_TABLE_SCHEMA, ModelComparisonChain
+from cves_autotriager.llm import (
+    OUTPUT_TABLE_SCHEMA,
+    ModelComparisonChain,
+    safe_save,
+)
 from cves_autotriager.logging_utils import config_from_yaml
-from cves_autotriager.parser import NVDEnricher, TrivyReportParser
+from cves_autotriager.parser import ImageReference, NVDEnricher, TrivyReportParser
 from cves_autotriager.prompt import CVEPromptBuilder
-from cves_autotriager.storage import SQLiteClient
+from cves_autotriager.storage import SchemaType, SQLiteClient
 
 config_from_yaml()
 
 logger = getLogger(__name__)
+COUNT_MAX = 3
 
 df = TrivyReportParser("./data/1.11-ubuntu2/").to_dataframe()
 
@@ -19,30 +25,26 @@ criticals = df[df["severity"] == "CRITICAL"]
 
 cves_id = criticals["id"].unique().tolist()
 
-logger.info("List of critical CVEs:\n%s", "\n".join(cves_id))
-
-cve_id = input("Enter the CVE ID: ")
-
-selected_cves = criticals.loc[criticals["id"] == cve_id]
-
-
 client = SQLiteClient("./data/db")
 db = client.get_database("cves_autotriager")
 
 if "nvd" not in db.tables:
-    schema = [("id", str), ("nvd_description", str), ("nvd_severity", str)]
+    schema: list[tuple[str, SchemaType]] = [
+        ("id", str),
+        ("nvd_description", str),
+        ("nvd_severity", str),
+    ]
     nvd = db.create_table("nvd", schema)
 else:
     nvd = db.get_table("nvd")
 
+output_table = (
+    db.get_table("output")
+    if "output" in db.tables
+    else db.create_table("output", OUTPUT_TABLE_SCHEMA)
+)
+
 enricher = NVDEnricher(nvd)
-enriched = enricher.enrich(selected_cves)
-
-prompt = CVEPromptBuilder().build(cve_id, enriched)
-
-logger.info("Prompt for CVE:\n%s", prompt)
-
-dry_run = input("Do you want to run the analysis? (yes/no): ")
 
 model_names = [
     "openrouter:deepseek/deepseek-v4-flash-0731",
@@ -57,26 +59,59 @@ models: dict[str, BaseChatModel] = {model: init_chat_model(model) for model in m
 
 judge = init_chat_model(judge_model_name)
 
-if dry_run.lower() == "yes":
-    result = ModelComparisonChain(models, judge, database=db, output_format="yaml").invoke(
-        prompt, cve_id
-    )
+model_chain = ModelComparisonChain(models, judge, database=db, output_format="yaml")
 
-    print()
-    print("Comparison result:")
-    for model_name, response in result.responses.items():
-        print(f"============= {model_name} ===========================")
-        print(response)
-        print()  # Add a blank line for better readability between model responses
+cves_id = criticals["id"].unique().tolist()
 
-    print("============= Comparison ===========================")
-    print(result.comparison)
-    print()
+output_df = pd.DataFrame(output_table.rows())
 
-    output_table = (
-        db.get_table("output")
-        if "output" in db.tables
-        else db.create_table("output", OUTPUT_TABLE_SCHEMA)
-    )
-    result.write(output_table)
-    logger.info("Stored comparison output rows in table 'output'")
+for cve_id in cves_id:
+    logger.info("Processing CVE: %s", cve_id)
+    selected_cves = criticals.loc[criticals["id"] == cve_id]
+
+    images = ImageReference.parse_many(";".join(selected_cves["image"].unique().tolist()))
+    processed_images = {
+        image.unpinned
+        for image_group in output_df.loc[output_df["cve_id"] == cve_id, "image"].dropna()
+        for image in ImageReference.parse_many(str(image_group))
+    }
+    left_over = images.difference(processed_images)
+
+    if not left_over:
+        logger.info("No new images to process for CVE: %s", cve_id)
+        continue
+
+    unprocessed_image_names = {
+        image_name
+        for image_name in selected_cves["image"].unique().tolist()
+        if (image := ImageReference.parse(image_name)) is not None and image.unpinned in left_over
+    }
+    selected_cves = selected_cves.loc[selected_cves["image"].isin(unprocessed_image_names)]
+
+    try:
+        enriched = enricher.enrich(selected_cves)
+        prompt = CVEPromptBuilder().build(cve_id, enriched)
+
+        result = model_chain.invoke(prompt, cve_id)
+    except Exception as e:
+        logger.error("Failed to process CVE: %s. Error: %s", cve_id, e)
+        continue
+
+    if False:
+        print()
+        print("Comparison result:")
+        for model_name, response in result.responses.items():
+            print(f"============= {model_name} ===========================")
+            print(response)
+            print()  # Add a blank line for better readability between model responses
+
+        print("============= Comparison ===========================")
+        print(result.comparison)
+        print()
+
+    success = safe_save(result, judge, output_table, count_max=COUNT_MAX)
+
+    if not success:
+        logger.error(
+            "Failed to store comparison output for CVE: %s after %d attempts.", cve_id, COUNT_MAX
+        )

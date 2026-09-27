@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -153,3 +155,41 @@ class NVDEnricher(WithLogging):
             cve_details = self._get_cve_details(str(_id))
             enriched_cves.append({"id": _id, **cve_details, **row})
         return pd.DataFrame(enriched_cves)
+
+
+@dataclass(frozen=True)
+class ImageReference:
+    platform: str
+    image: str
+    tag: str | None = None
+
+    @classmethod
+    def parse(cls, image_reference: str) -> ImageReference | None:
+        pattern = (
+            r"^(?:(docker\.io|ghcr\.io)/)?"
+            r"([a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)"
+            r"(?:(?::|@(?:sha256:|))([a-zA-Z0-9_.-]+))?$"
+        )
+        match = re.match(pattern, image_reference)
+        if match:
+            platform, name, tag = match.groups()
+            return cls(platform or "docker.io", name, tag)
+        return None
+
+    @classmethod
+    def parse_many(cls, image_references: str) -> set[ImageReference]:
+        """Parse semicolon-separated image references, rejecting invalid entries."""
+        parsed: set[ImageReference] = set()
+        for reference in image_references.split(";"):
+            reference = reference.strip()
+            if not reference:
+                continue
+            image = cls.parse(reference)
+            if image is None:
+                raise ValueError(f"Invalid image reference: {reference}")
+            parsed.add(image)
+        return parsed
+
+    @property
+    def unpinned(self) -> ImageReference:
+        return ImageReference(self.platform, self.image)
