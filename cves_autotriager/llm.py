@@ -6,7 +6,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import resources
 from logging import getLogger
 from string import Template
@@ -393,7 +393,7 @@ class ModelComparisonChain(WithLogging):
         self.logger.info("Storing response for model %s and CVE %s", model_name, cve_id)
         table.insert(
             (
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
                 model_name,
                 cve_id,
                 prompt,
