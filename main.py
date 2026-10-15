@@ -10,7 +10,7 @@ from cves_autotriager.llm import (
     OUTPUT_TABLE_SCHEMA,
     ComparisonResult,
     ModelComparisonChain,
-    safe_save,
+    asafe_save,
 )
 from cves_autotriager.logging_utils import config_from_yaml
 from cves_autotriager.parser import ImageReference, NVDEnricher, TrivyReportParser
@@ -102,7 +102,16 @@ async def process_cve(
     async with enrichment_lock:
         enriched = await enricher.aenrich(selected_cves)
     prompt = CVEPromptBuilder().build(cve_id, enriched)
-    return await model_chain.ainvoke(prompt, cve_id)
+    result = await model_chain.ainvoke(prompt, cve_id)
+
+    success = await asafe_save(result, judge, output_table, count_max=COUNT_MAX)
+
+    if not success:
+        logger.error(
+            "Failed to store comparison output for CVE: %s after %d attempts.", cve_id, COUNT_MAX
+        )
+    
+    return result
 
 
 async def process_cves(
@@ -140,9 +149,3 @@ for cve_id, result in results:
         print(result.comparison)
         print()
 
-    success = safe_save(result, judge, output_table, count_max=COUNT_MAX)
-
-    if not success:
-        logger.error(
-            "Failed to store comparison output for CVE: %s after %d attempts.", cve_id, COUNT_MAX
-        )

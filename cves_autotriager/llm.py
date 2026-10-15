@@ -452,3 +452,48 @@ def safe_save(
             )
 
     return False
+
+
+async def asafe_save(
+    result: ComparisonResult,
+    judge: BaseChatModel,
+    output_table: Table | None,
+    count_max: int = 3,
+) -> bool:
+    if output_table is None or count_max <= 0:
+        return False
+
+    template_path = resources.files("cves_autotriager.resources").joinpath("error_handler.txt")
+
+    for count in range(1, count_max + 1):
+        try:
+            result.write(output_table)
+            logger.info(
+                "Stored comparison output rows in table 'output' for CVE: %s", result.cve_id
+            )
+            return True
+        except Exception as error:
+            logger.error(
+                f"[{count}/{count_max}] Failed to process CVE: " f"{result.cve_id}. Error: {error}"
+            )
+            if count == count_max:
+                break
+
+            fix_prompt = Template(template_path.read_text(encoding="utf-8")).substitute(
+                prompt=result.comparison_prompt,
+                response=result.comparison,
+                exception=str(error),
+            )
+            logger.info("Requesting corrected YAML output for CVE: %s", result.cve_id)
+            new_response = (await judge.ainvoke(fix_prompt)).text
+            logger.info("Received new response from judge for CVE: %s", result.cve_id)
+            result = ComparisonResult(
+                cve_id=result.cve_id,
+                prompt=result.prompt,
+                responses=result.responses,
+                comparison_prompt=fix_prompt,
+                comparison=new_response,
+                output=result.output,
+            )
+
+    return False
