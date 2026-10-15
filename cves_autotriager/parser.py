@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pandas as pd
 import requests
 
@@ -103,14 +105,14 @@ class NVDEnricher(WithLogging):
         self.base_url = base_url
         self.request_delay = request_delay
 
-    def _get_cve_details(self, cve_id: str) -> dict[str, DataType]:
+    def _get_cached_cve_details(self, cve_id: str) -> dict[str, DataType] | None:
         if self.table and (cached := self.table.find_one("id", cve_id)) is not None:
             self.logger.debug(f"Found CVE with id {cve_id}")
             return cached
-
         self.logger.debug(f"CVE with id {cve_id} not found in cache")
-        details = self._fetch_cve_details(cve_id)
+        return None
 
+    def _store_cve_details(self, cve_id: str, details: dict[str, DataType]) -> dict[str, DataType]:
         if "error" in details:
             error = details["error"]
             error_message = error.decode() if isinstance(error, bytes) else str(error)
@@ -123,6 +125,30 @@ class NVDEnricher(WithLogging):
             self.table.insert([details[column] for column, _ in self.table.schema])
         return details
 
+    def _parse_cve_details(self, cve_id: str, data: dict[str, Any]) -> dict[str, DataType]:
+        vuln = data.get("vulnerabilities", [{}])[0].get("cve", {})
+        return {
+            "id": cve_id,
+            "nvd_description": vuln.get("descriptions", [{}])[0].get("value"),
+            "nvd_severity": vuln.get("metrics", {})
+            .get("cvssMetricV31", [{}])[0]
+            .get("cvssData", {})
+            .get("baseSeverity"),
+        }
+
+    def _get_cve_details(self, cve_id: str) -> dict[str, DataType]:
+        if (cached := self._get_cached_cve_details(cve_id)) is not None:
+            return cached
+        return self._store_cve_details(cve_id, self._fetch_cve_details(cve_id))
+
+    async def _aget_cve_details(
+        self, cve_id: str, client: httpx.AsyncClient
+    ) -> dict[str, DataType]:
+        if (cached := self._get_cached_cve_details(cve_id)) is not None:
+            return cached
+        details = await self._afetch_cve_details(cve_id, client)
+        return self._store_cve_details(cve_id, details)
+
     def _fetch_cve_details(self, cve_id: str) -> dict[str, DataType]:
         self.logger.info(f"Retrieving information for CVE with id {cve_id}")
 
@@ -130,30 +156,48 @@ class NVDEnricher(WithLogging):
         try:
             response = requests.get(self.base_url, params=params, timeout=10)
             response.raise_for_status()
-            data = response.json()
-            vuln = data.get("vulnerabilities", [{}])[0].get("cve", {})
-            return {
-                "id": cve_id,
-                "nvd_description": vuln.get("descriptions", [{}])[0].get("value"),
-                "nvd_severity": vuln.get("metrics", {})
-                .get("cvssMetricV31", [{}])[0]
-                .get("cvssData", {})
-                .get("baseSeverity"),
-            }
+            return self._parse_cve_details(cve_id, response.json())
         except requests.RequestException as error:
             return {"id": cve_id, "error": str(error)}
         finally:
             time.sleep(self.request_delay)
+
+    async def _afetch_cve_details(
+        self, cve_id: str, client: httpx.AsyncClient
+    ) -> dict[str, DataType]:
+        self.logger.info(f"Retrieving information for CVE with id {cve_id}")
+
+        params = {"cveId": cve_id}
+        try:
+            response = await client.get(self.base_url, params=params, timeout=10)
+            response.raise_for_status()
+            return self._parse_cve_details(cve_id, response.json())
+        except httpx.HTTPError as error:
+            return {"id": cve_id, "error": str(error)}
+        finally:
+            await asyncio.sleep(self.request_delay)
 
     def enrich(self, cves: pd.DataFrame) -> pd.DataFrame:
         if "id" not in cves.columns:
             raise ValueError("CVE dataframe must contain an 'id' column")
         enriched_cves: list[dict[str, Any]] = []
         for _, row in cves.iterrows():
-            _id = row.pop("id")
-            self.logger.debug(f"Processing CVE with id {_id}")
-            cve_details = self._get_cve_details(str(_id))
-            enriched_cves.append({"id": _id, **cve_details, **row})
+            cve_id = row.pop("id")
+            self.logger.debug(f"Processing CVE with id {cve_id}")
+            cve_details = self._get_cve_details(str(cve_id))
+            enriched_cves.append({"id": cve_id, **cve_details, **row})
+        return pd.DataFrame(enriched_cves)
+
+    async def aenrich(self, cves: pd.DataFrame) -> pd.DataFrame:
+        if "id" not in cves.columns:
+            raise ValueError("CVE dataframe must contain an 'id' column")
+        enriched_cves: list[dict[str, Any]] = []
+        async with httpx.AsyncClient() as client:
+            for _, row in cves.iterrows():
+                cve_id = row.pop("id")
+                self.logger.debug(f"Processing CVE with id {cve_id}")
+                cve_details = await self._aget_cve_details(str(cve_id), client)
+                enriched_cves.append({"id": cve_id, **cve_details, **row})
         return pd.DataFrame(enriched_cves)
 
 

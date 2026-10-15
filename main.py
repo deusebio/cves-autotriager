@@ -1,4 +1,5 @@
 import asyncio
+from itertools import batched
 from logging import getLogger
 
 import pandas as pd
@@ -23,7 +24,7 @@ COUNT_MAX = 3
 
 df = TrivyReportParser("./data/1.11-ubuntu2/").to_dataframe()
 
-criticals = df[df["severity"] == "CRITICAL"]
+criticals = df[df["severity"] == "HIGH"]
 
 cves_id = criticals["id"].unique().tolist()
 
@@ -66,15 +67,18 @@ model_chain = ModelComparisonChain(models, judge, database=db, output_format="ya
 cves_id = criticals["id"].unique().tolist()
 
 output_df = pd.DataFrame(output_table.rows(),columns=[column for column, _ in output_table.schema])
-pending_prompts: list[tuple[str, str]] = []
 
-for cve_id in cves_id:
+async def process_cve(
+    cve_id: str, enrichment_lock: asyncio.Lock
+) -> ComparisonResult | None:
     logger.info("Processing CVE: %s", cve_id)
     selected_cves = criticals.loc[criticals["id"] == cve_id]
 
     images = {
         image.unpinned
-        for image in ImageReference.parse_many(";".join(selected_cves["image"].unique().tolist()))
+        for image in ImageReference.parse_many(
+            ";".join(selected_cves["image"].unique().tolist())
+        )
     }
     processed_images = {
         image.unpinned
@@ -85,35 +89,41 @@ for cve_id in cves_id:
 
     if not left_over:
         logger.info("No new images to process for CVE: %s", cve_id)
-        continue
+        return None
 
     unprocessed_image_names = {
         image_name
         for image_name in selected_cves["image"].unique().tolist()
-        if (image := ImageReference.parse(image_name)) is not None and image.unpinned in left_over
+        if (image := ImageReference.parse(image_name)) is not None
+        and image.unpinned in left_over
     }
     selected_cves = selected_cves.loc[selected_cves["image"].isin(unprocessed_image_names)]
 
-    try:
-        enriched = enricher.enrich(selected_cves)
-        prompt = CVEPromptBuilder().build(cve_id, enriched)
-    except Exception as e:
-        logger.error("Failed to process CVE: %s. Error: %s", cve_id, e)
+    async with enrichment_lock:
+        enriched = await enricher.aenrich(selected_cves)
+    prompt = CVEPromptBuilder().build(cve_id, enriched)
+    return await model_chain.ainvoke(prompt, cve_id)
+
+
+async def process_cves(
+    batch_size: int,
+) -> list[tuple[str, ComparisonResult | BaseException | None]]:
+    enrichment_lock = asyncio.Lock()
+    results: list[tuple[str, ComparisonResult | BaseException | None]] = []
+    for batch in batched(cves_id, batch_size):
+        logger.info("Processing batch of CVEs: %s", batch)
+        batch_results = await asyncio.gather(
+            *(process_cve(cve_id, enrichment_lock) for cve_id in batch),
+            return_exceptions=True,
+        )
+        results.extend(zip(batch, batch_results, strict=True))
+    return results
+
+results = asyncio.run(process_cves(batch_size=10))
+
+for cve_id, result in results:
+    if result is None:
         continue
-
-    pending_prompts.append((cve_id, prompt))
-
-
-async def invoke_pending_prompts() -> list[ComparisonResult | BaseException]:
-    return await asyncio.gather(
-        *(model_chain.ainvoke(prompt, cve_id) for cve_id, prompt in pending_prompts),
-        return_exceptions=True,
-    )
-
-
-results = asyncio.run(invoke_pending_prompts())
-
-for (cve_id, _prompt), result in zip(pending_prompts, results, strict=True):
     if isinstance(result, BaseException):
         logger.error("Failed to process CVE: %s. Error: %s", cve_id, result)
         continue
