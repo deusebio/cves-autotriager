@@ -4,7 +4,7 @@ Automated triage tooling for CVEs.
 
 ## Requirements
 
-- Python >= 3.10
+- Python >= 3.12
 - [Poetry](https://python-poetry.org/) >= 2.0
 
 ## Setup

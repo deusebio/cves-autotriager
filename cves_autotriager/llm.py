@@ -6,7 +6,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import resources
 from logging import getLogger
 from string import Template
@@ -210,6 +210,78 @@ class ModelComparisonChain(WithLogging):
             output=self._output_format,
         )
 
+    async def ainvoke(self, prompt: str, cve_id: str = "unknown") -> ComparisonResult:
+        """Asynchronously generate candidate answers in parallel, then invoke the judge."""
+        cached_responses: dict[str, str] = {}
+        pending_model_names = []
+        for name in self._candidate_models:
+            cached = self._get_cached_response(
+                self._candidate_table,
+                model_name=name,
+                cve_id=cve_id,
+                prompt=prompt,
+            )
+            if cached is not None:
+                cached_responses[name] = cached
+            else:
+                pending_model_names.append(name)
+
+        if pending_model_names:
+            timed_models = {
+                name: RunnableLambda(self._async_timed_invoke(model))
+                for name, model in self._candidate_models.items()
+                if name in pending_model_names
+            }
+            raw_results = await RunnableParallel(timed_models).ainvoke(prompt)
+            for name, result in raw_results.items():
+                if "response" in result:
+                    response = result["response"]
+                    execution_time = float(result["execution_time"])
+                    self._store_response(
+                        self._candidate_table,
+                        model_name=name,
+                        cve_id=cve_id,
+                        prompt=prompt,
+                        response=response,
+                        execution_time=execution_time,
+                    )
+                    cached_responses[name] = response
+                elif "error" in result:
+                    self.logger.error(f"Error invoking model {name}: {result['error']}")
+
+        comparison_prompt = self._template.substitute(
+            original_prompt=prompt,
+            responses=json.dumps(cached_responses, indent=2, sort_keys=True),
+            table_format=self._output_format,
+        )
+        cached_comparison = self._get_cached_response(
+            self._judge_table,
+            model_name=self._judge_name,
+            cve_id=cve_id,
+            prompt=comparison_prompt,
+        )
+        if cached_comparison is None:
+            started = time.perf_counter()
+            raw_comparison = await self._judge.ainvoke(comparison_prompt)
+            cached_comparison = self._message_text(raw_comparison)
+            self._store_response(
+                self._judge_table,
+                model_name=self._judge_name,
+                cve_id=cve_id,
+                prompt=comparison_prompt,
+                response=cached_comparison,
+                execution_time=time.perf_counter() - started,
+            )
+
+        return ComparisonResult(
+            cve_id=cve_id,
+            prompt=prompt,
+            responses=cached_responses,
+            comparison_prompt=comparison_prompt,
+            comparison=cached_comparison,
+            output=self._output_format,
+        )
+
     def _timed_invoke(self, model: BaseChatModel) -> Callable[[str], dict[str, str | float]]:
         def _run(_prompt: str) -> dict[str, str | float]:
             started = time.perf_counter()
@@ -223,6 +295,21 @@ class ModelComparisonChain(WithLogging):
             return {
                 "response": response,
                 "execution_time": execution_time,
+            }
+
+        return _run
+
+    def _async_timed_invoke(self, model: BaseChatModel) -> Callable[[str], Any]:
+        async def _run(_prompt: str) -> dict[str, str | float]:
+            started = time.perf_counter()
+            try:
+                raw_response = await model.ainvoke(_prompt)
+            except Exception as error:
+                return {"error": str(error)}
+
+            return {
+                "response": self._message_text(raw_response),
+                "execution_time": time.perf_counter() - started,
             }
 
         return _run
@@ -306,7 +393,7 @@ class ModelComparisonChain(WithLogging):
         self.logger.info("Storing response for model %s and CVE %s", model_name, cve_id)
         table.insert(
             (
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
                 model_name,
                 cve_id,
                 prompt,
@@ -354,6 +441,51 @@ def safe_save(
             )
             logger.info("Requesting corrected YAML output for CVE: %s", result.cve_id)
             new_response = judge.invoke(fix_prompt).text
+            logger.info("Received new response from judge for CVE: %s", result.cve_id)
+            result = ComparisonResult(
+                cve_id=result.cve_id,
+                prompt=result.prompt,
+                responses=result.responses,
+                comparison_prompt=fix_prompt,
+                comparison=new_response,
+                output=result.output,
+            )
+
+    return False
+
+
+async def asafe_save(
+    result: ComparisonResult,
+    judge: BaseChatModel,
+    output_table: Table | None,
+    count_max: int = 3,
+) -> bool:
+    if output_table is None or count_max <= 0:
+        return False
+
+    template_path = resources.files("cves_autotriager.resources").joinpath("error_handler.txt")
+
+    for count in range(1, count_max + 1):
+        try:
+            result.write(output_table)
+            logger.info(
+                "Stored comparison output rows in table 'output' for CVE: %s", result.cve_id
+            )
+            return True
+        except Exception as error:
+            logger.error(
+                f"[{count}/{count_max}] Failed to process CVE: " f"{result.cve_id}. Error: {error}"
+            )
+            if count == count_max:
+                break
+
+            fix_prompt = Template(template_path.read_text(encoding="utf-8")).substitute(
+                prompt=result.comparison_prompt,
+                response=result.comparison,
+                exception=str(error),
+            )
+            logger.info("Requesting corrected YAML output for CVE: %s", result.cve_id)
+            new_response = (await judge.ainvoke(fix_prompt)).text
             logger.info("Received new response from judge for CVE: %s", result.cve_id)
             result = ComparisonResult(
                 cve_id=result.cve_id,
