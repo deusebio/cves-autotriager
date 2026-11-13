@@ -1,6 +1,8 @@
+import asyncio
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from cves_autotriager.parser import NVDEnricher
@@ -36,22 +38,48 @@ def test_get_cve_details_caches_nvd_response(
         [("id", str), ("nvd_description", str), ("nvd_severity", str)],
     )
     request_count = 0
+    async_request_count = 0
 
     def fake_get(*args: Any, **kwargs: Any) -> FakeResponse:
         nonlocal request_count
         request_count += 1
         return FakeResponse()
 
+    async def fake_async_get(*args: Any, **kwargs: Any) -> FakeResponse:
+        nonlocal async_request_count
+        async_request_count += 1
+        return FakeResponse()
+
     monkeypatch.setattr("cves_autotriager.parser.requests.get", fake_get)
+    monkeypatch.setattr("cves_autotriager.parser.httpx.AsyncClient.get", fake_async_get)
     enricher = NVDEnricher(table, request_delay=0)
 
-    first = enricher._get_cve_details("CVE-2026-1234")
-    second = enricher._get_cve_details("CVE-2026-1234")
+    sync_input = pd.DataFrame([{"id": "CVE-2026-1234", "package": "sync"}])
+    first = enricher.enrich(sync_input)
+    second = enricher.enrich(sync_input)
 
-    assert first == second == {
+    async def get_async_details() -> pd.DataFrame:
+        async_input = pd.DataFrame([{"id": "CVE-2026-5678", "package": "async"}])
+        first = await enricher.aenrich(async_input)
+        second = await enricher.aenrich(async_input)
+        assert first.equals(second)
+        return first
+
+    async_enriched = asyncio.run(get_async_details())
+
+    expected_sync = {
         "id": "CVE-2026-1234",
         "nvd_description": "Example vulnerability",
         "nvd_severity": "HIGH",
     }
-    assert request_count == 1
-    assert list(table.rows()) == [first]
+    expected_async = {
+        "id": "CVE-2026-5678",
+        "nvd_description": "Example vulnerability",
+        "nvd_severity": "HIGH",
+        "package": "async",
+    }
+    assert first.iloc[0][["id", "nvd_description", "nvd_severity"]].to_dict() == expected_sync
+    assert second.equals(first)
+    assert async_enriched.iloc[0].to_dict() == expected_async
+    assert request_count == async_request_count == 1
+    assert len(list(table.rows())) == 2

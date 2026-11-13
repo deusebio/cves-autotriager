@@ -4,11 +4,11 @@ import json
 import os
 from collections.abc import Callable
 from logging import Logger, config, getLogger
-from typing import Any, Literal, TypeAlias, TypedDict
+from typing import Any, Literal, TypedDict
 
 from envyaml import EnvYAML
 
-PathLike: TypeAlias = str | os.PathLike[str]
+type PathLike = str | os.PathLike[str]
 
 LevelTypes = Literal[
     "CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET", 50, 40, 30, 20, 10, 0

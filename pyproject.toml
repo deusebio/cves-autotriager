@@ -4,9 +4,10 @@ version = "0.1.0"
 description = "Automated triage tooling for CVEs."
 authors = [{ name = "Enrico Deusebio" }]
 readme = "README.md"
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.12,<4.0"
 dependencies = [
 	"envyaml>=1.10",
+	"httpx>=0.27",
 	"langchain[anthropic,openai,deepseek]>=1.1",
 	"langchain-openrouter>0.2",
 	"pandas>=2.0",
@@ -39,14 +40,14 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 extend-exclude = ["cves_autotriager/CVE_Analysis_1.11.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 strict = true
 warn_unused_ignores = true
 exclude = ["cves_autotriager/CVE_Analysis_1\\.11\\.py"]

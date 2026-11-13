@@ -7,12 +7,12 @@ import sqlite3
 from collections.abc import Generator, Sequence
 from contextlib import AbstractContextManager, closing, contextmanager
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import Literal
 
 import pandas as pd
 
-DataType: TypeAlias = int | float | str | bytes | None
-SchemaType: TypeAlias = type[int] | type[float] | type[str] | type[bytes]
+type DataType = int | float | str | bytes | None
+type SchemaType = type[int] | type[float] | type[str] | type[bytes]
 
 TYPES: dict[SchemaType, str] = {
     int: "INTEGER",
